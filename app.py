@@ -1,37 +1,43 @@
-from flask import Flask, Response, request
+from flask import Flask, request
 from twilio.twiml.voice_response import VoiceResponse, Gather
+import os
 
 app = Flask(__name__)
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     response = VoiceResponse()
+
     gather = Gather(
-        input="speech",
+        input="speech dtmf",
         action="/respond",
         method="POST",
         language="fr-FR",
         speech_timeout="auto"
     )
-    gather.say("Bonjour, parlez apres le bip.", language="fr-FR")
+
+    gather.say("Bonjour, parlez après le bip.", language="fr-FR")
     response.append(gather)
-    return Response(str(response), mimetype="text/xml")
+
+    return str(response), 200, {"Content-Type": "text/xml"}
+
 
 @app.route("/respond", methods=["GET", "POST"])
 def respond():
     speech = request.form.get("SpeechResult", "")
     confidence = request.form.get("Confidence", "")
-    
-    # Affichage dans le terminal
+
     print("=" * 40)
-    print(f"Ce que l'utilisateur a dit : {speech}")
-    print(f"Confiance : {confidence}")
+    print("Utilisateur :", speech)
+    print("Confiance :", confidence)
     print("=" * 40)
-    
-    # Réponse au caller
+
     response = VoiceResponse()
-    response.say("Bien note. Merci.", language="fr-FR")
-    return Response(str(response), mimetype="text/xml")
+    response.say("Bien noté. Merci.", language="fr-FR")
+
+    return str(response), 200, {"Content-Type": "text/xml"}
+
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
