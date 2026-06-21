@@ -52,5 +52,16 @@ def recording_status():
     print(f"Status enregistrement : {status}")
     return "", 200
 
+@app.route("/download-recording", methods=["GET"])
+def download_recording():
+    if os.path.exists("recording.mp3"):
+        with open("recording.mp3", "rb") as f:
+            return Response(
+                f.read(),
+                mimetype="audio/mpeg",
+                headers={"Content-Disposition": "attachment; filename=recording.mp3"}
+            )
+    else:
+        return "Aucun enregistrement trouvé", 404
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
