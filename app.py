@@ -1,43 +1,36 @@
-from flask import Flask, request
-from twilio.twiml.voice_response import VoiceResponse, Gather
-import os
+from flask import Flask, Response, request
+from twilio.twiml.voice_response import VoiceResponse, Record
 
 app = Flask(__name__)
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     response = VoiceResponse()
-
-    gather = Gather(
-        input="speech dtmf",
-        action="/respond",
-        method="POST",
-        language="fr-FR",
-        speech_timeout="auto"
+    response.say("Bonjour, parlez apres le bip.", language="fr-FR")
+    response.record(
+        max_length=30,
+        action="/handle-recording",
+        recording_status_callback="/recording-status",
+        play_beep=True,
+        transcribe=False
     )
+    return Response(str(response), mimetype="text/xml")
 
-    gather.say("Bonjour, parlez après le bip.", language="fr-FR")
-    response.append(gather)
-
-    return str(response), 200, {"Content-Type": "text/xml"}
-
-
-@app.route("/respond", methods=["GET", "POST"])
-def respond():
-    speech = request.form.get("SpeechResult", "")
-    confidence = request.form.get("Confidence", "")
-
+@app.route("/handle-recording", methods=["GET", "POST"])
+def handle_recording():
+    recording_url = request.form.get("RecordingUrl", "")
     print("=" * 40)
-    print("Utilisateur :", speech)
-    print("Confiance :", confidence)
+    print(f"Audio reçu : {recording_url}")
     print("=" * 40)
-
+    
     response = VoiceResponse()
-    response.say("Bien noté. Merci.", language="fr-FR")
+    response.say("Bien recu. Merci.", language="fr-FR")
+    return Response(str(response), mimetype="text/xml")
 
-    return str(response), 200, {"Content-Type": "text/xml"}
-
+@app.route("/recording-status", methods=["GET", "POST"])
+def recording_status():
+    print("Status:", request.form.get("RecordingStatus"))
+    return "", 200
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(port=5000, debug=True)
