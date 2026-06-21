@@ -1,7 +1,12 @@
 from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Record
+import requests
+import os
 
 app = Flask(__name__)
+
+ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
@@ -19,17 +24,32 @@ def voice():
 @app.route("/handle-recording", methods=["GET", "POST"])
 def handle_recording():
     recording_url = request.form.get("RecordingUrl", "")
+
     print("=" * 40)
-    print(f"Audio reçu : {recording_url}")
+    print(f"URL audio : {recording_url}")
     print("=" * 40)
-    
+
+    # Télécharger le fichier audio
+    audio_response = requests.get(
+        recording_url + ".mp3",
+        auth=(ACCOUNT_SID, AUTH_TOKEN)
+    )
+
+    if audio_response.status_code == 200:
+        with open("recording.mp3", "wb") as f:
+            f.write(audio_response.content)
+        print("Audio sauvegardé : recording.mp3")
+    else:
+        print(f"Erreur téléchargement audio : {audio_response.status_code}")
+
     response = VoiceResponse()
     response.say("Bien recu. Merci.", language="fr-FR")
     return Response(str(response), mimetype="text/xml")
 
 @app.route("/recording-status", methods=["GET", "POST"])
 def recording_status():
-    print("Status:", request.form.get("RecordingStatus"))
+    status = request.form.get("RecordingStatus")
+    print(f"Status enregistrement : {status}")
     return "", 200
 
 if __name__ == "__main__":
