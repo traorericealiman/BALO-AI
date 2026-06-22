@@ -1,67 +1,154 @@
-from flask import Flask, Response, request
-from twilio.twiml.voice_response import VoiceResponse, Record
+from flask import Flask, request, Response, send_file
+from twilio.twiml.voice_response import VoiceResponse
+from dotenv import load_dotenv
 import requests
+import tempfile
 import os
+
+# ================= LOAD ENV =================
+load_dotenv()
 
 app = Flask(__name__)
 
-ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+DJELIA_API_KEY = os.getenv("DJELIA_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+BASE_URL = os.getenv("BASE_URL")
+
+# ================= API URLs =================
+TRANSCRIBE_URL = "https://djelia.cloud/api/v1/models/transcribe"
+TRANSLATE_URL = "https://djelia.cloud/api/v1/models/translate"
+TTS_URL = "https://djelia.cloud/api/v2/models/tts"
+
+DJELIA_HEADERS = {
+    "x-api-key": DJELIA_API_KEY
+}
+
+GEMINI_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/"
+    f"gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+)
+
+# ================= ENTRY POINT TWILIO =================
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     response = VoiceResponse()
-    response.say("Bonjour, parlez apres le bip.", language="fr-FR")
+
+    response.say(
+        "Bonjour, parlez après le bip.",
+        language="fr-FR"
+    )
+
     response.record(
-        max_length=30,
-        action="/handle-recording",
-        recording_status_callback="/recording-status",
+        max_length=20,
         play_beep=True,
-        transcribe=False
+        action="/handle-recording"
     )
+
     return Response(str(response), mimetype="text/xml")
 
-@app.route("/handle-recording", methods=["GET", "POST"])
+# ================= HANDLE RECORDING =================
+
+@app.route("/handle-recording", methods=["POST"])
 def handle_recording():
-    recording_url = request.form.get("RecordingUrl", "")
 
-    print("=" * 40)
-    print(f"URL audio : {recording_url}")
-    print("=" * 40)
+    recording_url = request.form.get("RecordingUrl") + ".wav"
 
-    # Télécharger le fichier audio
-    audio_response = requests.get(
-        recording_url + ".mp3",
-        auth=(ACCOUNT_SID, AUTH_TOKEN)
+    # télécharger audio Twilio
+    audio = requests.get(
+        recording_url,
+        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     )
 
-    if audio_response.status_code == 200:
-        with open("recording.mp3", "wb") as f:
-            f.write(audio_response.content)
-        print("Audio sauvegardé : recording.mp3")
-    else:
-        print(f"Erreur téléchargement audio : {audio_response.status_code}")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp.write(audio.content)
+    tmp.close()
 
+    # ================= 1. TRANSCRIPTION DJELIA =================
+    with open(tmp.name, "rb") as f:
+        res = requests.post(
+            TRANSCRIBE_URL,
+            headers=DJELIA_HEADERS,
+            files={"file": f},
+            params={"translate_to_french": True}
+        )
+
+    text_dioula = res.json().get("text", "")
+
+    # ================= 2. GEMINI (ASSISTANT COMMERCIAL) =================
+    prompt = f"""
+Tu es un assistant commercial intelligent en Afrique de l'Ouest.
+
+Réponds de manière courte, claire et utile.
+
+Message client :
+{text_dioula}
+"""
+
+    gemini = requests.post(
+        GEMINI_URL,
+        json={"contents": [{"parts": [{"text": prompt}]}]}
+    )
+
+    if gemini.status_code == 200:
+        reply_fr = gemini.json()["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        reply_fr = "Je n'ai pas compris votre demande."
+
+    # ================= 3. TRADUCTION FR -> DIOULA =================
+    tr = requests.post(
+        TRANSLATE_URL,
+        headers=DJELIA_HEADERS,
+        json={
+            "source": "fra_Latn",
+            "target": "bam_Latn",
+            "text": reply_fr
+        }
+    )
+
+    reply_dioula = tr.json().get("text", reply_fr)
+
+    # ================= 4. TTS DIOULA =================
+    tts = requests.post(
+        TTS_URL,
+        headers=DJELIA_HEADERS,
+        json={"text": reply_dioula}
+    )
+
+    audio_path = "/tmp/reply.mp3"
+
+    with open(audio_path, "wb") as f:
+        f.write(tts.content)
+
+    # cleanup audio input
+    os.remove(tmp.name)
+
+    # ================= RESPONSE TWILIO =================
     response = VoiceResponse()
-    response.say("Bien recu. Merci.", language="fr-FR")
+
+    response.say("Voici votre réponse.")
+
+    response.play(f"{BASE_URL}/audio")
+
     return Response(str(response), mimetype="text/xml")
 
-@app.route("/recording-status", methods=["GET", "POST"])
-def recording_status():
-    status = request.form.get("RecordingStatus")
-    print(f"Status enregistrement : {status}")
-    return "", 200
+# ================= AUDIO ENDPOINT =================
 
-@app.route("/download-recording", methods=["GET"])
-def download_recording():
-    if os.path.exists("recording.mp3"):
-        with open("recording.mp3", "rb") as f:
-            return Response(
-                f.read(),
-                mimetype="audio/mpeg",
-                headers={"Content-Disposition": "attachment; filename=recording.mp3"}
-            )
-    else:
-        return "Aucun enregistrement trouvé", 404
+@app.route("/audio", methods=["GET"])
+def audio():
+    path = "/tmp/reply.mp3"
+
+    if os.path.exists(path):
+        return send_file(path, mimetype="audio/mpeg")
+
+    return "No audio found", 404
+
+
+# ================= RUN APP =================
+
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
