@@ -21,7 +21,10 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN")
 BASE_URL           = os.getenv("BASE_URL")
 
-GITHUB_RAW = "https://raw.githubusercontent.com/traorericealiman/BALO-AI/main"
+print(f"[CONFIG] BASE_URL={BASE_URL}")
+print(f"[CONFIG] DJELIA_API_KEY={'OK' if DJELIA_API_KEY else 'MANQUANT'}")
+print(f"[CONFIG] TWILIO_ACCOUNT_SID={'OK' if TWILIO_ACCOUNT_SID else 'MANQUANT'}")
+print(f"[CONFIG] TWILIO_AUTH_TOKEN={'OK' if TWILIO_AUTH_TOKEN else 'MANQUANT'}")
 
 TRANSCRIBE_URL = "https://djelia.cloud/api/v1/models/transcribe"
 TTS_URL        = "https://djelia.cloud/api/v2/models/tts"
@@ -29,6 +32,7 @@ DJELIA_HEADERS = {"x-api-key": DJELIA_API_KEY}
 
 with open(os.path.join(BASE_DIR, "references.json"), encoding="utf-8") as f:
     REFERENCES = json.load(f)
+print(f"[CONFIG] {len(REFERENCES)} références chargées")
 
 call_state = {}
 call_audio = {}
@@ -63,43 +67,56 @@ def find_best_match(transcription: str):
 
 
 def download_recording(url, auth, retries=3, delay=2):
-    for _ in range(retries):
+    print(f"[DOWNLOAD] Téléchargement depuis {url}")
+    for attempt in range(retries):
         resp = requests.get(url, auth=auth)
+        print(f"[DOWNLOAD] Tentative {attempt+1} | status: {resp.status_code} | taille: {len(resp.content)} bytes")
         if resp.status_code == 200 and len(resp.content) > 1000:
+            print(f"[DOWNLOAD] Succès !")
             return resp.content
         time.sleep(delay)
+    print(f"[DOWNLOAD] Échec après {retries} tentatives")
     return None
 
 
 def generate_no_match_audio():
     path = "/tmp/no_match.mp3"
     if os.path.exists(path):
+        print(f"[TTS] no_match.mp3 déjà en cache")
         return path
 
+    print(f"[TTS] Génération audio no_match...")
     texte = "D'accord, je n'ai pas bien compris. Pouvez-vous répéter s'il vous plaît ?"
     tts = requests.post(TTS_URL, headers=DJELIA_HEADERS, json={"text": texte})
+    print(f"[TTS] status: {tts.status_code} | taille: {len(tts.content)} bytes")
     if tts.status_code == 200 and len(tts.content) > 0:
         with open(path, "wb") as f:
             f.write(tts.content)
+        print(f"[TTS] Fichier sauvegardé : {path}")
         return path
+    print(f"[TTS] Échec génération audio")
     return None
 
 
 # ── traitement arrière-plan ───────────────────────────────────────────────────
 
 def process_audio(recording_url, call_sid):
+    print(f"[PROCESS] Début traitement pour {call_sid}")
     call_state[call_sid] = "processing"
 
     content = download_recording(recording_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
     if not content:
+        print(f"[PROCESS] Impossible de télécharger l'audio pour {call_sid}")
         call_state[call_sid] = "error"
         return
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     tmp.write(content)
     tmp.close()
+    print(f"[PROCESS] Audio sauvegardé temporairement : {tmp.name}")
 
     try:
+        print(f"[TRANSCRIBE] Envoi à Djelia...")
         with open(tmp.name, "rb") as f:
             res = requests.post(
                 TRANSCRIBE_URL,
@@ -107,17 +124,20 @@ def process_audio(recording_url, call_sid):
                 files={"file": f},
                 params={"translate_to_french": False}
             )
+        print(f"[TRANSCRIBE] status: {res.status_code} | réponse: {res.text[:200]}")
         transcription = res.json().get("text", "")
-        print(f"[TRANSCRIPTION] {transcription}")
+        print(f"[TRANSCRIPTION] '{transcription}'")
 
         match, score = find_best_match(transcription)
 
         if match:
             print(f"[HIT] {match['label']} (score {score})")
-            call_audio[call_sid] = f"{GITHUB_RAW}/{match['audio']}"
+            audio_path = os.path.join(BASE_DIR, match["audio"])
+            print(f"[HIT] Fichier audio : {audio_path} | exists: {os.path.exists(audio_path)}")
+            call_audio[call_sid] = audio_path
             call_state[call_sid] = "ready"
         else:
-            print(f"[MISS] score max {score}")
+            print(f"[MISS] score max {score} — génération no_match")
             call_audio[call_sid] = generate_no_match_audio()
             call_state[call_sid] = "no_match"
 
@@ -126,15 +146,18 @@ def process_audio(recording_url, call_sid):
         call_state[call_sid] = "error"
     finally:
         os.remove(tmp.name)
+        print(f"[PROCESS] Fichier temporaire supprimé")
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
+    print(f"[VOICE] Appel entrant")
     r = VoiceResponse()
-    r.play(f"{GITHUB_RAW}/Bienvenue.wav")
+    r.play(f"{BASE_URL}/audio/Bienvenue.mp3")
     r.record(max_length=20, play_beep=True, action="/handle-recording")
+    print(f"[VOICE] TwiML envoyé : {str(r)}")
     return Response(str(r), mimetype="text/xml")
 
 
@@ -142,14 +165,16 @@ def voice():
 def handle_recording():
     recording_url = request.form.get("RecordingUrl") + ".wav"
     call_sid      = request.form.get("CallSid")
+    print(f"[RECORDING] call_sid={call_sid} | url={recording_url}")
 
     t = threading.Thread(target=process_audio, args=(recording_url, call_sid))
     t.daemon = True
     t.start()
 
     r = VoiceResponse()
-    r.play(f"{GITHUB_RAW}/Fin.wav")
+    r.play(f"{BASE_URL}/audio/Fin.mp3")
     r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
+    print(f"[RECORDING] TwiML envoyé : {str(r)}")
     return Response(str(r), mimetype="text/xml")
 
 
@@ -157,19 +182,23 @@ def handle_recording():
 def wait():
     call_sid = request.args.get("call_sid")
     state    = call_state.get(call_sid, "processing")
+    print(f"[WAIT] call_sid={call_sid} | state={state}")
 
     r = VoiceResponse()
 
     if state in ("ready", "no_match"):
+        print(f"[WAIT] Audio prêt → lecture résultat")
         r.play(f"{BASE_URL}/result?call_sid={call_sid}")
         call_state.pop(call_sid, None)
 
     elif state == "error":
+        print(f"[WAIT] Erreur pour {call_sid}")
         r.say("Une erreur est survenue. Veuillez rappeler.", language="fr-FR")
         call_state.pop(call_sid, None)
         call_audio.pop(call_sid, None)
 
     else:
+        print(f"[WAIT] Toujours en traitement, on attend...")
         r.pause(length=3)
         r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
 
@@ -180,21 +209,13 @@ def wait():
 def result():
     call_sid   = request.args.get("call_sid")
     audio_file = call_audio.get(call_sid)
+    print(f"[RESULT] call_sid={call_sid} | audio_file={audio_file}")
 
-    if not audio_file:
-        return "No audio found", 404
-
-    # URL GitHub → on redirige Twilio directement
-    if audio_file.startswith("http"):
-        return Response(
-            f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{audio_file}</Play></Response>',
-            mimetype="text/xml"
-        )
-
-    # Fichier local (no_match.mp3)
-    if os.path.exists(audio_file):
+    if audio_file and os.path.exists(audio_file):
+        print(f"[RESULT] Envoi du fichier : {audio_file}")
         return send_file(audio_file, mimetype="audio/mpeg")
 
+    print(f"[RESULT] Fichier introuvable !")
     return "No audio found", 404
 
 
