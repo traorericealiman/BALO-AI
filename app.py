@@ -27,7 +27,6 @@ print(f"[CONFIG] TWILIO_ACCOUNT_SID={'OK' if TWILIO_ACCOUNT_SID else 'MANQUANT'}
 print(f"[CONFIG] TWILIO_AUTH_TOKEN={'OK' if TWILIO_AUTH_TOKEN else 'MANQUANT'}")
 
 TRANSCRIBE_URL = "https://djelia.cloud/api/v1/models/transcribe"
-TTS_URL        = "https://djelia.cloud/api/v2/models/tts"
 DJELIA_HEADERS = {"x-api-key": DJELIA_API_KEY}
 
 with open(os.path.join(BASE_DIR, "references.json"), encoding="utf-8") as f:
@@ -60,7 +59,8 @@ def find_best_match(transcription: str):
             best_score = score
             best_ref   = ref
 
-    seuil = best_ref["seuil"] if best_ref else 60
+    # Seuil fixé à 15% minimum
+    seuil = best_ref.get("seuil", 15) if best_ref else 15
     if best_score >= seuil:
         return best_ref, best_score
     return None, best_score
@@ -76,25 +76,6 @@ def download_recording(url, auth, retries=3, delay=2):
             return resp.content
         time.sleep(delay)
     print(f"[DOWNLOAD] Échec après {retries} tentatives")
-    return None
-
-
-def generate_no_match_audio():
-    path = "/tmp/no_match.mp3"
-    if os.path.exists(path):
-        print(f"[TTS] no_match.mp3 déjà en cache")
-        return path
-
-    print(f"[TTS] Génération audio no_match...")
-    texte = "D'accord, je n'ai pas bien compris. Pouvez-vous répéter s'il vous plaît ?"
-    tts = requests.post(TTS_URL, headers=DJELIA_HEADERS, json={"text": texte})
-    print(f"[TTS] status: {tts.status_code} | taille: {len(tts.content)} bytes")
-    if tts.status_code == 200 and len(tts.content) > 0:
-        with open(path, "wb") as f:
-            f.write(tts.content)
-        print(f"[TTS] Fichier sauvegardé : {path}")
-        return path
-    print(f"[TTS] Échec génération audio")
     return None
 
 
@@ -126,7 +107,6 @@ def process_audio(recording_url, call_sid):
             )
         print(f"[TRANSCRIBE] status: {res.status_code} | réponse: {res.text[:200]}")
 
-        # Djelia retourne une liste de segments
         raw = res.json()
         if isinstance(raw, list):
             transcription = " ".join(segment.get("text", "") for segment in raw)
@@ -143,8 +123,7 @@ def process_audio(recording_url, call_sid):
             call_audio[call_sid] = audio_path
             call_state[call_sid] = "ready"
         else:
-            print(f"[MISS] score max {score} — génération no_match")
-            call_audio[call_sid] = generate_no_match_audio()
+            print(f"[MISS] score max {score}")
             call_state[call_sid] = "no_match"
 
     except Exception as e:
@@ -190,10 +169,16 @@ def wait():
 
     r = VoiceResponse()
 
-    if state in ("ready", "no_match"):
+    if state == "ready":
         print(f"[WAIT] Audio prêt → lecture résultat")
         r.play(f"{BASE_URL}/result?call_sid={call_sid}")
         call_state.pop(call_sid, None)
+
+    elif state == "no_match":
+        print(f"[WAIT] No match → message vocal")
+        r.say("Je n'ai pas compris. Veuillez réessayer.", language="fr-FR")
+        call_state.pop(call_sid, None)
+        call_audio.pop(call_sid, None)
 
     elif state == "error":
         print(f"[WAIT] Erreur pour {call_sid}")

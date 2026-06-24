@@ -2,7 +2,7 @@
   {
     "label": "vendre tomates",
     "transcription": "m'bè n'go ka tómato feere",
-    "audio": "ventes.mp3",
-    "seuil": 60
+    "audio": "ventes.wav",
+    "seuil": 15
   }
 ]
