@@ -21,6 +21,8 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN")
 BASE_URL           = os.getenv("BASE_URL")
 
+GITHUB_RAW = "https://raw.githubusercontent.com/traorericealiman/BALO-AI/main"
+
 TRANSCRIBE_URL = "https://djelia.cloud/api/v1/models/transcribe"
 TTS_URL        = "https://djelia.cloud/api/v2/models/tts"
 DJELIA_HEADERS = {"x-api-key": DJELIA_API_KEY}
@@ -112,7 +114,7 @@ def process_audio(recording_url, call_sid):
 
         if match:
             print(f"[HIT] {match['label']} (score {score})")
-            call_audio[call_sid] = os.path.join(BASE_DIR, match["audio"])
+            call_audio[call_sid] = f"{GITHUB_RAW}/{match['audio']}"
             call_state[call_sid] = "ready"
         else:
             print(f"[MISS] score max {score}")
@@ -131,7 +133,7 @@ def process_audio(recording_url, call_sid):
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     r = VoiceResponse()
-    r.play(f"{BASE_URL}/audio/Bienvenue.wav")
+    r.play(f"{GITHUB_RAW}/Bienvenue.wav")
     r.record(max_length=20, play_beep=True, action="/handle-recording")
     return Response(str(r), mimetype="text/xml")
 
@@ -146,7 +148,7 @@ def handle_recording():
     t.start()
 
     r = VoiceResponse()
-    r.play(f"{BASE_URL}/audio/Fin.wav")
+    r.play(f"{GITHUB_RAW}/Fin.wav")
     r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
     return Response(str(r), mimetype="text/xml")
 
@@ -179,7 +181,18 @@ def result():
     call_sid   = request.args.get("call_sid")
     audio_file = call_audio.get(call_sid)
 
-    if audio_file and os.path.exists(audio_file):
+    if not audio_file:
+        return "No audio found", 404
+
+    # URL GitHub → on redirige Twilio directement
+    if audio_file.startswith("http"):
+        return Response(
+            f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{audio_file}</Play></Response>',
+            mimetype="text/xml"
+        )
+
+    # Fichier local (no_match.mp3)
+    if os.path.exists(audio_file):
         return send_file(audio_file, mimetype="audio/mpeg")
 
     return "No audio found", 404
