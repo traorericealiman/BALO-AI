@@ -112,7 +112,7 @@ def process_audio(recording_url, call_sid):
 
         if match:
             print(f"[HIT] {match['label']} (score {score})")
-            call_audio[call_sid] = os.path.join(BASE_DIR, "static", match["audio"])
+            call_audio[call_sid] = os.path.join(BASE_DIR, match["audio"])
             call_state[call_sid] = "ready"
         else:
             print(f"[MISS] score max {score}")
@@ -131,7 +131,7 @@ def process_audio(recording_url, call_sid):
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     r = VoiceResponse()
-    r.play(f"{BASE_URL}/static/Bienvenue.wav")
+    r.play(f"{BASE_URL}/audio/Bienvenue.wav")
     r.record(max_length=20, play_beep=True, action="/handle-recording")
     return Response(str(r), mimetype="text/xml")
 
@@ -146,7 +146,7 @@ def handle_recording():
     t.start()
 
     r = VoiceResponse()
-    r.play(f"{BASE_URL}/static/Fin.wav")
+    r.play(f"{BASE_URL}/audio/Fin.wav")
     r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
     return Response(str(r), mimetype="text/xml")
 
@@ -185,10 +185,10 @@ def result():
     return "No audio found", 404
 
 
-@app.route("/static/<path:filename>", methods=["GET"])
-def serve_static(filename):
-    path = os.path.join(BASE_DIR, "static", filename)
-    print(f"[STATIC] serving: {path} | exists: {os.path.exists(path)}")
+@app.route("/audio/<filename>", methods=["GET"])
+def serve_audio(filename):
+    path = os.path.join(BASE_DIR, filename)
+    print(f"[AUDIO] serving: {path} | exists: {os.path.exists(path)}")
     if os.path.exists(path):
         return send_file(path)
     return "File not found", 404
