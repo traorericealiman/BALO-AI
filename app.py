@@ -125,7 +125,13 @@ def process_audio(recording_url, call_sid):
                 params={"translate_to_french": False}
             )
         print(f"[TRANSCRIBE] status: {res.status_code} | réponse: {res.text[:200]}")
-        transcription = res.json().get("text", "")
+
+        # Djelia retourne une liste de segments
+        raw = res.json()
+        if isinstance(raw, list):
+            transcription = " ".join(segment.get("text", "") for segment in raw)
+        else:
+            transcription = raw.get("text", "")
         print(f"[TRANSCRIPTION] '{transcription}'")
 
         match, score = find_best_match(transcription)
@@ -157,7 +163,6 @@ def voice():
     r = VoiceResponse()
     r.play(f"{BASE_URL}/audio/Bienvenue.mp3")
     r.record(max_length=20, play_beep=True, action="/handle-recording")
-    print(f"[VOICE] TwiML envoyé : {str(r)}")
     return Response(str(r), mimetype="text/xml")
 
 
@@ -174,7 +179,6 @@ def handle_recording():
     r = VoiceResponse()
     r.play(f"{BASE_URL}/audio/Fin.mp3")
     r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
-    print(f"[RECORDING] TwiML envoyé : {str(r)}")
     return Response(str(r), mimetype="text/xml")
 
 
@@ -213,7 +217,13 @@ def result():
 
     if audio_file and os.path.exists(audio_file):
         print(f"[RESULT] Envoi du fichier : {audio_file}")
-        return send_file(audio_file, mimetype="audio/mpeg")
+        with open(audio_file, "rb") as f:
+            data = f.read()
+        mimetype = "audio/mpeg" if audio_file.endswith(".mp3") else "audio/wav"
+        return Response(data, mimetype=mimetype, headers={
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-cache"
+        })
 
     print(f"[RESULT] Fichier introuvable !")
     return "No audio found", 404
@@ -224,7 +234,14 @@ def serve_audio(filename):
     path = os.path.join(BASE_DIR, filename)
     print(f"[AUDIO] serving: {path} | exists: {os.path.exists(path)}")
     if os.path.exists(path):
-        return send_file(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        print(f"[AUDIO] bytes: {len(data)}")
+        mimetype = "audio/mpeg" if filename.endswith(".mp3") else "audio/wav"
+        return Response(data, mimetype=mimetype, headers={
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-cache"
+        })
     return "File not found", 404
 
 
