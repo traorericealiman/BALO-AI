@@ -14,6 +14,8 @@ load_dotenv()
 
 app = Flask(__name__)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 DJELIA_API_KEY     = os.getenv("DJELIA_API_KEY")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN")
@@ -23,7 +25,7 @@ TRANSCRIBE_URL = "https://djelia.cloud/api/v1/models/transcribe"
 TTS_URL        = "https://djelia.cloud/api/v2/models/tts"
 DJELIA_HEADERS = {"x-api-key": DJELIA_API_KEY}
 
-with open("references.json", encoding="utf-8") as f:
+with open(os.path.join(BASE_DIR, "references.json"), encoding="utf-8") as f:
     REFERENCES = json.load(f)
 
 call_state = {}
@@ -68,7 +70,6 @@ def download_recording(url, auth, retries=3, delay=2):
 
 
 def generate_no_match_audio():
-    """Génère un audio TTS Djelia pour le cas no_match et le met en cache."""
     path = "/tmp/no_match.mp3"
     if os.path.exists(path):
         return path
@@ -97,7 +98,6 @@ def process_audio(recording_url, call_sid):
     tmp.close()
 
     try:
-        # Transcription Djelia — on garde le Dioula brut
         with open(tmp.name, "rb") as f:
             res = requests.post(
                 TRANSCRIBE_URL,
@@ -108,12 +108,11 @@ def process_audio(recording_url, call_sid):
         transcription = res.json().get("text", "")
         print(f"[TRANSCRIPTION] {transcription}")
 
-        # Matching phonétique
         match, score = find_best_match(transcription)
 
         if match:
             print(f"[HIT] {match['label']} (score {score})")
-            call_audio[call_sid] = os.path.join("static", match["audio"])
+            call_audio[call_sid] = os.path.join(BASE_DIR, "static", match["audio"])
             call_state[call_sid] = "ready"
         else:
             print(f"[MISS] score max {score}")
@@ -142,12 +141,10 @@ def handle_recording():
     recording_url = request.form.get("RecordingUrl") + ".wav"
     call_sid      = request.form.get("CallSid")
 
-    # Lancer traitement en arrière-plan
     t = threading.Thread(target=process_audio, args=(recording_url, call_sid))
     t.daemon = True
     t.start()
 
-    # Répondre immédiatement à Twilio
     r = VoiceResponse()
     r.play(f"{BASE_URL}/static/Fin.wav")
     r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
@@ -171,7 +168,6 @@ def wait():
         call_audio.pop(call_sid, None)
 
     else:
-        # Toujours en traitement — re-check dans 3s
         r.pause(length=3)
         r.redirect(f"{BASE_URL}/wait?call_sid={call_sid}")
 
@@ -191,7 +187,8 @@ def result():
 
 @app.route("/static/<path:filename>", methods=["GET"])
 def serve_static(filename):
-    path = os.path.join(os.path.dirname(__file__), "static", filename)
+    path = os.path.join(BASE_DIR, "static", filename)
+    print(f"[STATIC] serving: {path} | exists: {os.path.exists(path)}")
     if os.path.exists(path):
         return send_file(path)
     return "File not found", 404
